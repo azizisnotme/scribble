@@ -1,7 +1,7 @@
 {
   "name": "scribble",
   "private": true,
-  "version": "0.2.8",
+  "version": "0.2.9",
   "type": "module",
   "description": "Scribble — native desktop typing assistant (Tauri + Rust + React).",
   "scripts": {

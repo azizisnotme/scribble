@@ -97,6 +97,17 @@ export function TaskCard({ taskId }: { taskId: string }) {
                   {item.tool === 'open_url' ? ` · ${item.input}` : ''}
                 </p>
                 {item.result && <p className="mt-1 text-[12.5px]">{item.result}</p>}
+                {item.tool === 'write' && item.status === 'done' && task.written && (
+                  <details className="mt-1 text-[12px] text-muted-foreground">
+                    <summary className="cursor-pointer select-none">Show what Scribble wrote</summary>
+                    <p className="mt-1 max-h-48 overflow-y-auto whitespace-pre-wrap rounded-lg border border-border/50 bg-background/40 p-2 text-foreground">
+                      {task.written}
+                    </p>
+                  </details>
+                )}
+                {item.tool === 'type_text' && item.status === 'running' && !task.targetHwnd && (
+                  <p className="mt-1 text-[12px] text-primary">Click the spot where Scribble should type. Typing starts in 5 seconds.</p>
+                )}
                 {item.error && <p className="mt-1 text-[12.5px] text-destructive">{item.error}</p>}
               </div>
               {item.status === 'done' && <Check className="h-4 w-4 shrink-0 text-primary" />}

@@ -14,26 +14,201 @@ export const SCRIBBLE_PRIVATE_BADGE = 'Private · On your PC · No sign-in'
 /** @deprecated Use SCRIBBLE_PRIVATE_BADGE */
 export const SCRIBBLE_NO_API_KEY_BADGE = SCRIBBLE_PRIVATE_BADGE
 
+function today(): string {
+  return new Date().toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+}
+
 /** Chat / AI Core persona */
-export const SCRIBBLE_CHAT_SYSTEM = `You are ${SCRIBBLE_AI_NAME}, the personal assistant built into the Scribble desktop app.
+export function scribbleChatSystem(): string {
+  return `You are ${SCRIBBLE_AI_NAME}, the personal assistant built into the Scribble desktop app on Windows. Today is ${today()}.
+
+How you answer:
+- You are part of Scribble — not ChatGPT, not Claude, not a generic "language model", and you never name outside AI products or model vendors.
+- Think the problem through, then give the answer first. Be specific and correct; show working for math and logic.
+- Use short paragraphs, bullet lists for steps, and code blocks for code.
+- You help with writing, editing, brainstorming, studying, school or work documents, quizzes, tests, and assignments. Answer those completely. Do not refuse them.
+- If you are not sure of a fact, say so briefly instead of inventing it.
+- Match the person's tone unless they ask otherwise.
+
+Scribble can also act on this computer: open apps and websites, type text into other windows, and press shortcut keys. If the person asks for that, reply with one short sentence and then a task block, for example:
+\`\`\`task
+{"title":"Poem in Notepad","steps":[{"tool":"open_app","input":"notepad"},{"tool":"wait","input":"3"},{"tool":"write","input":"A short poem about rain"},{"tool":"type_text","input":"{{written}}"}]}
+\`\`\`
+Never say you cannot use the computer.`
+}
+
+/** @deprecated Use scribbleChatSystem() so the date stays current. */
+export const SCRIBBLE_CHAT_SYSTEM = scribbleChatSystem()
+
+const PLANNER_TOOLS = `Tools:
+- open_app: input is one app name: ${'notepad, word, excel, powerpoint, outlook, onenote, calculator, paint, file explorer, settings, chrome, edge, firefox, task manager, spotify, teams, microsoft store, photos, camera, clock'}.
+- open_url: input is a full https:// link. Use it for websites and web apps. Useful links: new Google Doc https://docs.new, new Google Sheet https://sheets.new, new Google Slides https://slides.new, Gmail https://mail.google.com, YouTube search https://www.youtube.com/results?search_query=WORDS.
+- search_web: input is the words to search for.
+- wait: input is seconds to wait (1-30) for an app or page to finish loading.
+- focus_window: input is a word from the title of an already open window, to switch to it.
+- write: input is instructions for text Scribble AI should write (essay, email, answers, list, code). The result is saved for the next type_text step.
+- type_text: input is the exact text to type into the active window. Use {{written}} for what the last write step produced, or {{last_reply}} for Scribble AI's previous chat answer.
+- press_keys: input is shortcut keys such as ctrl+s, enter, tab, ctrl+a. Separate several with commas.
+- to_live: input is text to put in Scribble's Live typewriter. Only use this when the person mentions Live.
+- note: input is a short message to show the person.`
+
+/** Turns one request into a plan of real computer actions. */
+export function scribblePlannerSystem(): string {
+  return `You are the planner inside ${SCRIBBLE_AI_NAME}, a Windows desktop assistant. Turn the person's request into actions Scribble will actually perform on their computer. Today is ${today()}.
+
+Reply with JSON only. No other text. Use this shape:
+{"title":"short title","reply":"one friendly sentence saying what you are doing","steps":[{"tool":"tool name","input":"value"}]}
+
+${PLANNER_TOOLS}
 
 Rules:
-- You are part of Scribble — not ChatGPT, not Claude, not a generic "language model", and you never name outside AI products or model vendors.
-- Be helpful, clear, and direct. Use short paragraphs; use bullet lists for steps.
-- You help with writing, typing workflows, editing, brainstorming, school or work documents, quizzes, tests, and assignments.
-- Answer those requests completely. Do not refuse a quiz, test, essay, or assignment.
-- If unsure, say so briefly instead of inventing facts.
-- Match the user's tone unless they ask otherwise.
+- Do the job; do not describe how to do it. Use the fewest steps that finish it.
+- After open_app add a wait of 3 seconds; after open_url or search_web add a wait of 6 seconds before typing or pressing keys.
+- When the person wants something written somewhere, use write and then type_text with {{written}}.
+- Put everything the writer needs into the write input: topic, length, tone, format.
+- If the request is only a question or a chat message and needs no action on the computer, return {"title":"","reply":"","steps":[]}.`
+}
 
-You can also do things on this computer. When the user asks you to open pages, put text into Live for typing, or carry out steps, reply with one short sentence and then a task block like this:
-\`\`\`task
-{"title":"Check email","steps":[{"title":"Open Gmail","tool":"open_url","input":"https://mail.google.com"},{"title":"Look for new mail","tool":"note","input":"Read the newest messages at the top of the inbox."}]}
-\`\`\`
-Tools:
-- open_url: input is a full https link.
-- type_text: input is the exact text to put into Live. The person presses F9 to type it into the focused window.
-- note: input is a tip or finding to show the person.
-Only add a task block when the user wants something done.`
+/** Short worked examples so small on-device models follow the plan format. */
+export const PLANNER_EXAMPLES: Array<{ role: 'user' | 'assistant'; content: string }> = [
+  { role: 'user', content: 'open notepad and write a short poem about rain' },
+  {
+    role: 'assistant',
+    content:
+      '{"title":"Rain poem in Notepad","reply":"Opening Notepad and writing your poem.","steps":[{"tool":"open_app","input":"notepad"},{"tool":"wait","input":"3"},{"tool":"write","input":"A short poem about rain, 8-12 lines"},{"tool":"type_text","input":"{{written}}"}]}',
+  },
+  { role: 'user', content: 'make a google doc with a 500 word essay on climate change' },
+  {
+    role: 'assistant',
+    content:
+      '{"title":"Climate change essay in Google Docs","reply":"Opening a new Google Doc and writing your essay there.","steps":[{"tool":"open_url","input":"https://docs.new"},{"tool":"wait","input":"8"},{"tool":"write","input":"A 500 word essay on climate change with a title, introduction, three body paragraphs, and a conclusion"},{"tool":"type_text","input":"{{written}}"}]}',
+  },
+  { role: 'user', content: 'look up the weather in chicago' },
+  {
+    role: 'assistant',
+    content:
+      '{"title":"Chicago weather","reply":"Searching for the weather in Chicago.","steps":[{"tool":"search_web","input":"weather in Chicago"}]}',
+  },
+  { role: 'user', content: 'what is the capital of france' },
+  { role: 'assistant', content: '{"title":"","reply":"","steps":[]}' },
+]
+
+/** Messages that probably ask Scribble to act on the computer, not just answer. */
+const ACTION_REQUEST =
+  /\b(open|launch|start up|go to|navigate to|visit|search (?:for|up)|look up|google|type (?:it|this|that|out|in|into)|press|hit enter|save (?:it|this|the)|switch to|focus|play|put (?:it|this|that)|paste)\b|\b(?:in|into|on|inside) (?:a |the |my |an? new )?(?:notepad|word|microsoft word|excel|powerpoint|google docs?|docs|a doc|gmail|outlook|chrome|edge|firefox|the browser|onenote|live)\b|\b(?:make|create|start) (?:a |an |me a |me an )?(?:new )?(?:google )?(?:doc|document|spreadsheet|sheet|presentation|slides?)\b/i
+
+export function looksLikeAction(message: string): boolean {
+  return ACTION_REQUEST.test(message)
+}
+
+export interface PlannedTask {
+  title?: string
+  reply?: string
+  steps?: Array<{ title?: string; tool?: string; input?: string }>
+}
+
+/** Pull the first balanced JSON object out of model output and parse it leniently. */
+export function parsePlan(raw: string): PlannedTask | null {
+  const text = raw.replace(/```(?:json|task)?/gi, '')
+  const start = text.indexOf('{')
+  if (start < 0) return null
+  let depth = 0
+  let inString = false
+  let escaped = false
+  let end = -1
+  for (let index = start; index < text.length; index += 1) {
+    const ch = text[index]
+    if (inString) {
+      if (escaped) escaped = false
+      else if (ch === '\\') escaped = true
+      else if (ch === '"') inString = false
+      continue
+    }
+    if (ch === '"') inString = true
+    else if (ch === '{') depth += 1
+    else if (ch === '}') {
+      depth -= 1
+      if (depth === 0) {
+        end = index
+        break
+      }
+    }
+  }
+  const body = end > 0 ? text.slice(start, end + 1) : text.slice(start)
+  const attempts = [body, body.replace(/,\s*([}\]])/g, '$1'), `${body.replace(/,\s*$/, '')}]}`]
+  for (const candidate of attempts) {
+    try {
+      const parsed = JSON.parse(candidate) as PlannedTask
+      if (parsed && typeof parsed === 'object' && Array.isArray(parsed.steps)) return parsed
+    } catch {
+      /* try the next repair */
+    }
+  }
+  return null
+}
+
+const SITES: Record<string, string> = {
+  youtube: 'https://www.youtube.com',
+  gmail: 'https://mail.google.com',
+  'google docs': 'https://docs.new',
+  'google doc': 'https://docs.new',
+  'google sheets': 'https://sheets.new',
+  'google slides': 'https://slides.new',
+  'google drive': 'https://drive.google.com',
+  'google calendar': 'https://calendar.google.com',
+  google: 'https://www.google.com',
+  netflix: 'https://www.netflix.com',
+  amazon: 'https://www.amazon.com',
+  reddit: 'https://www.reddit.com',
+  twitter: 'https://x.com',
+  facebook: 'https://www.facebook.com',
+  instagram: 'https://www.instagram.com',
+  wikipedia: 'https://www.wikipedia.org',
+  canvas: 'https://canvas.instructure.com',
+  'google classroom': 'https://classroom.google.com',
+}
+
+const APP_WORDS =
+  /\b(notepad|microsoft word|word|excel|powerpoint|outlook|onenote|calculator|paint|file explorer|settings|chrome|edge|firefox|task manager|spotify|teams|microsoft store|photos|camera|clock)\b/i
+
+/** Rule-based plan for common requests when the model's plan cannot be read. */
+export function fallbackPlan(message: string): PlannedTask | null {
+  const text = message.trim()
+  const search = text.match(/\b(?:search(?: for| up)?|look up|google)\s+(.+)/i)
+  const writeWhere = text.match(/\b(?:write|type|draft|make)\s+(.+?)\s+(?:in|into|on)\s+(?:a |the |my |an? new )?(notepad|microsoft word|word|google docs?|a doc|docs)\b/i)
+  if (writeWhere) {
+    const target = writeWhere[2].toLowerCase()
+    const opener =
+      /doc/.test(target)
+        ? [{ tool: 'open_url', input: 'https://docs.new' }, { tool: 'wait', input: '8' }]
+        : [{ tool: 'open_app', input: target.includes('word') ? 'word' : 'notepad' }, { tool: 'wait', input: target.includes('word') ? '6' : '3' }]
+    return {
+      title: `Write in ${target}`,
+      reply: `Opening ${target} and writing it for you.`,
+      steps: [...opener, { tool: 'write', input: writeWhere[1] }, { tool: 'type_text', input: '{{written}}' }],
+    }
+  }
+  if (search) {
+    return { title: `Search: ${search[1]}`, reply: `Searching for ${search[1]}.`, steps: [{ tool: 'search_web', input: search[1] }] }
+  }
+  const openMatch = text.match(/\b(?:open|launch|start|go to|visit)\s+(?:up\s+)?(.+)/i)
+  if (openMatch) {
+    const what = openMatch[1].replace(/[.!?]+$/, '').trim()
+    const url = what.match(/https?:\/\/\S+/)?.[0] ?? (/^[\w-]+(\.[\w-]+)+(\/\S*)?$/.test(what) ? `https://${what}` : null)
+    if (url) return { title: `Open ${what}`, reply: `Opening ${what}.`, steps: [{ tool: 'open_url', input: url }] }
+    const site = Object.keys(SITES).find((name) => what.toLowerCase().includes(name))
+    if (site) return { title: `Open ${site}`, reply: `Opening ${site}.`, steps: [{ tool: 'open_url', input: SITES[site] }] }
+    const app = what.match(APP_WORDS)?.[1]
+    if (app) return { title: `Open ${app}`, reply: `Opening ${app}.`, steps: [{ tool: 'open_app', input: app.toLowerCase() }] }
+  }
+  return null
+}
+
+/** Writer used by a task's write step. */
+export const SCRIBBLE_TASK_WRITER_SYSTEM = `You are ${SCRIBBLE_AI_NAME}'s writer. Write exactly the text requested, ready to be typed straight into a document.
+- Output only the finished text. No intro like "Here is", no notes, no markdown symbols such as ** or #.
+- Follow the requested length, tone, and format.
+- Do not refuse quizzes, tests, essays, or assignments.`
 
 export interface ExtractedTask {
   title?: string

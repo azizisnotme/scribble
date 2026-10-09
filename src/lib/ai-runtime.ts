@@ -12,7 +12,14 @@ import {
   statusReady,
   type ScribbleEssayLength,
 } from '@/lib/scribble-ai'
-import { disposeLocalEngine, getActiveBrainId, getActiveEngine, initScribbleEngine } from '@/lib/webllm-local'
+import {
+  activeBrainThinks,
+  disposeLocalEngine,
+  getActiveBrainId,
+  getActiveContextWindow,
+  getActiveEngine,
+  initScribbleEngine,
+} from '@/lib/webllm-local'
 
 const LEGACY_MODEL_KEYS = [
   'scribble_ai_preferred_webllm_model',
@@ -181,6 +188,45 @@ export interface StreamGenerateOpts {
   topP?: number
 }
 
+const MIN_REPLY_TOKENS = 256
+
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 3.2) + 8
+}
+
+/**
+ * Keep the system prompt and the newest turns that fit the model's memory.
+ * Sending a whole long chat overflows the context window and the model refuses to answer.
+ */
+export function fitMessages(messages: ScribbleMessage[], contextWindow: number, replyTokens: number): ScribbleMessage[] {
+  const system = messages.filter((m) => m.role === 'system')
+  const rest = messages.filter((m) => m.role !== 'system')
+  let budget = contextWindow - replyTokens - system.reduce((sum, m) => sum + estimateTokens(m.content), 0)
+  const kept: ScribbleMessage[] = []
+  for (let index = rest.length - 1; index >= 0; index -= 1) {
+    const message = rest[index]
+    const cost = estimateTokens(message.content)
+    if (cost > budget) {
+      if (kept.length === 0) {
+        const room = Math.max(200, Math.floor(budget * 3.2) - 40)
+        kept.unshift({ ...message, content: message.content.slice(-room) })
+      }
+      break
+    }
+    kept.unshift(message)
+    budget -= cost
+  }
+  while (kept.length > 1 && kept[0].role === 'assistant') kept.shift()
+  return [...system, ...kept]
+}
+
+/** Remove any thinking the model wrote before its answer, including an unfinished block. */
+export function stripThinking(text: string): string {
+  const withoutClosed = text.replace(/<think>[\s\S]*?<\/think>\s*/g, '')
+  const open = withoutClosed.indexOf('<think>')
+  return (open < 0 ? withoutClosed : withoutClosed.slice(0, open)).replace(/^\s+/, '')
+}
+
 /** Stream a reply from Scribble AI. Retries once on failure. */
 export async function streamGenerate(opts: StreamGenerateOpts): Promise<string> {
   const run = async (): Promise<string> => {
@@ -195,15 +241,21 @@ export async function streamGenerate(opts: StreamGenerateOpts): Promise<string> 
 
     const temperature = opts.temperature ?? 0.7
     const topP = opts.topP ?? 0.9
-    const maxTokens = opts.maxTokens ?? 4096
+    const contextWindow = getActiveContextWindow()
+    const wanted = Math.min(opts.maxTokens ?? 4096, Math.floor(contextWindow * 0.6))
+    const messages = fitMessages(opts.messages, contextWindow, wanted)
+    const promptTokens = messages.reduce((sum, m) => sum + estimateTokens(m.content), 0)
+    const maxTokens = Math.max(MIN_REPLY_TOKENS, Math.min(wanted, contextWindow - promptTokens - 64))
 
-    let acc = ''
+    let raw = ''
+    let shown = ''
     const stream = await engine.chat.completions.create({
-      messages: opts.messages,
+      messages,
       temperature,
       top_p: topP,
       stream: true,
       max_tokens: maxTokens,
+      ...(activeBrainThinks() ? { extra_body: { enable_thinking: false } } : {}),
     })
 
     for await (const chunk of stream) {
@@ -212,11 +264,15 @@ export async function streamGenerate(opts: StreamGenerateOpts): Promise<string> 
         break
       }
       const piece = chunk.choices[0]?.delta?.content ?? ''
-      if (piece) {
-        acc += piece
-        opts.onToken?.(piece)
+      if (!piece) continue
+      raw += piece
+      const visible = stripThinking(raw)
+      if (visible.length > shown.length && visible.startsWith(shown)) {
+        opts.onToken?.(visible.slice(shown.length))
+        shown = visible
       }
     }
+    const acc = stripThinking(raw)
     if (!acc.trim()) {
       throw new Error('Scribble AI returned nothing — try a shorter prompt or Retry.')
     }

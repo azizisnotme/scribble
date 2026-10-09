@@ -15,7 +15,9 @@ import {
 import { TaskCard } from '@/components/TaskCard'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { createTask, deleteTask, startTask } from '@/lib/tasks'
+import { useAuth } from '@/contexts/auth'
+import { outOfUsesMessage, refreshAiQuota, resetTimeLabel, spendAiUse, useAiQuota, type AiQuota } from '@/lib/ai-quota'
+import { createTask, deleteTask, setTaskTypingAccess, startTask, type TaskDraft } from '@/lib/tasks'
 import { cn } from '@/lib/utils'
 import {
   buildEssayUserPrompt,
@@ -33,12 +35,18 @@ import {
 import {
   ESSAY_LENGTH_LABELS,
   extractTask,
+  fallbackPlan,
   friendlyAiError,
+  looksLikeAction,
+  parsePlan,
+  PLANNER_EXAMPLES,
   SCRIBBLE_AI_NAME,
   SCRIBBLE_AI_TAGLINE,
-  SCRIBBLE_CHAT_SYSTEM,
   SCRIBBLE_PRIVATE_BADGE,
+  scribbleChatSystem,
+  scribblePlannerSystem,
   visibleReply,
+  type PlannedTask,
 } from '@/lib/scribble-ai'
 
 type AiTab = 'write' | 'chat'
@@ -95,6 +103,34 @@ function loadTab(): AiTab {
   }
 }
 
+const REFERS_BACK = /\b(it|that|this|those|these|the (?:answer|essay|text|list|reply|above))\b/i
+
+/** Ask the planner for real computer steps. Returns null when the request needs no action. */
+async function planActions(userText: string, lastReply: string, signal: AbortSignal): Promise<PlannedTask | null> {
+  const request =
+    lastReply && REFERS_BACK.test(userText)
+      ? `${userText}\n\n(Scribble AI's previous answer, which "it" or "that" may mean. Type it with {{last_reply}}.)\n"""${lastReply.slice(0, 600)}"""`
+      : userText
+  const messages: ScribbleMessage[] = [
+    { role: 'system', content: scribblePlannerSystem() },
+    ...PLANNER_EXAMPLES,
+    { role: 'user', content: request },
+  ]
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const raw = await streamGenerate({ messages, temperature: 0.2, topP: 0.9, maxTokens: 700, signal })
+    const plan = parsePlan(raw)
+    if (plan) return plan
+    messages.push({ role: 'assistant', content: raw }, { role: 'user', content: 'That was not valid JSON. Reply again with only the JSON object.' })
+  }
+  return fallbackPlan(userText)
+}
+
+function quotaLabel(quota: AiQuota | null): string {
+  if (!quota) return ''
+  if (quota.unlimited) return quota.owner ? 'Owner · unlimited' : 'Unlimited'
+  return `${quota.remaining ?? 0} of ${quota.limit ?? 0} left today`
+}
+
 function runtimeToUi(rt: AiRuntimeSnapshot): { status: UiStatus; detail: string; progress: number; label: string } {
   if (rt.phase === 'loading') {
     return { status: 'loading', detail: rt.detail, progress: rt.progress, label: rt.loadLabel }
@@ -136,7 +172,14 @@ export function ScribbleAI({ onSendToLive }: ScribbleAIProps) {
 
   const abortRef = useRef<AbortController | null>(null)
   const transcriptRef = useRef<HTMLDivElement | null>(null)
+  const { isAdmin } = useAuth()
+  const quota = useAiQuota()
+  const outOfUses = Boolean(quota && !quota.unlimited && (quota.remaining ?? 0) <= 0)
 
+  useEffect(() => setTaskTypingAccess(isAdmin), [isAdmin])
+  useEffect(() => {
+    void refreshAiQuota()
+  }, [])
   useEffect(() => subscribeAiRuntime(setRuntime), [])
   useEffect(() => {
     void ensureAiRuntime().catch(() => {})
@@ -182,6 +225,11 @@ export function ScribbleAI({ onSendToLive }: ScribbleAIProps) {
     if (!topic || generating || !aiReady) return
 
     setWriteError('')
+    const credit = await spendAiUse()
+    if (!credit.allowed) {
+      setWriteError(credit.message)
+      return
+    }
     setDraft('')
     setGenerating(true)
     setUiStatus('sending')
@@ -219,7 +267,7 @@ export function ScribbleAI({ onSendToLive }: ScribbleAIProps) {
 
   const messagesForSend = useCallback(
     (nextHistory: ChatTurn[]): ScribbleMessage[] => [
-      { role: 'system', content: SCRIBBLE_CHAT_SYSTEM },
+      { role: 'system', content: scribbleChatSystem() },
       ...nextHistory.map((t) => ({ role: t.role, content: t.content || t.notice || '…' })),
     ],
     [],
@@ -229,24 +277,58 @@ export function ScribbleAI({ onSendToLive }: ScribbleAIProps) {
     const userText = chatInput.trim()
     if (!userText || uiStatus !== 'ready') return
 
+    setChatError('')
+    setUiStatus('sending')
+    const credit = await spendAiUse()
+    if (!credit.allowed) {
+      setChatError(credit.message)
+      setUiStatus('ready')
+      return
+    }
+
     const turn: ChatTurn = { role: 'user', content: userText, ts: Date.now() }
     const nextHistory = [...history, turn]
+    const lastReply = [...history].reverse().find((t) => t.role === 'assistant' && t.content.trim())?.content ?? ''
     setHistory(nextHistory)
     saveHistory(nextHistory)
     setChatInput('')
-    setChatError('')
     setStreaming('')
-    setUiStatus('sending')
 
     const ctl = new AbortController()
     abortRef.current = ctl
 
+    const runTask = (draft: TaskDraft, reply: ChatTurn) => {
+      const created = createTask(userText, draft, lastReply)
+      if (!created) return false
+      reply.taskId = created.id
+      if (!reply.content) reply.content = `On it: ${created.title}`
+      startTask(created.id)
+      return true
+    }
+
     try {
+      if (looksLikeAction(userText)) {
+        setStreaming('Planning the steps…')
+        const plan = await planActions(userText, lastReply, ctl.signal)
+        if (plan?.steps?.length) {
+          const reply: ChatTurn = { role: 'assistant', content: plan.reply?.trim() ?? '', ts: Date.now() }
+          if (runTask(plan, reply)) {
+            const final: ChatTurn[] = [...nextHistory, reply]
+            setHistory(final)
+            saveHistory(final)
+            setStreaming('')
+            setUiStatus('ready')
+            return
+          }
+        }
+        setStreaming('')
+      }
+
       const acc = await streamGenerate({
         messages: messagesForSend(nextHistory),
         signal: ctl.signal,
         temperature: 0.65,
-        topP: 0.92,
+        topP: 0.9,
         maxTokens: 4096,
         onToken: (chunk) => setStreaming((prev) => prev + chunk),
       })
@@ -254,12 +336,7 @@ export function ScribbleAI({ onSendToLive }: ScribbleAIProps) {
       const reply: ChatTurn = { role: 'assistant', content: text, ts: Date.now() }
       if (task) {
         try {
-          const created = createTask(userText, task)
-          if (created) {
-            reply.taskId = created.id
-            if (!reply.content) reply.content = `On it: ${created.title}`
-            startTask(created.id)
-          }
+          runTask(task, reply)
         } catch (cause) {
           reply.notice = cause instanceof Error ? cause.message : 'That task could not start.'
         }
@@ -313,11 +390,30 @@ export function ScribbleAI({ onSendToLive }: ScribbleAIProps) {
               <StatusPill status={busy ? 'sending' : uiStatus} text={statusDetail} />
             </div>
             <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground">{SCRIBBLE_AI_TAGLINE}</p>
-            <p className="mt-2 inline-block rounded-lg border border-primary/35 bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary">
-              {SCRIBBLE_PRIVATE_BADGE}
-            </p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <p className="inline-block rounded-lg border border-primary/35 bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary">
+                {SCRIBBLE_PRIVATE_BADGE}
+              </p>
+              {quota && (
+                <p
+                  className={cn(
+                    'inline-block rounded-lg border px-2.5 py-1 text-[11px] font-semibold',
+                    outOfUses ? 'border-destructive/40 bg-destructive/10 text-destructive' : 'border-border/60 bg-secondary/40 text-muted-foreground',
+                  )}
+                  title={quota.unlimited ? 'No daily limit on this account' : `Uses come back ${resetTimeLabel(quota.resetsAt)}`}
+                >
+                  {quotaLabel(quota)}
+                </p>
+              )}
+            </div>
           </div>
         </div>
+
+        {outOfUses && (
+          <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-[12px] text-destructive" role="status">
+            {outOfUsesMessage(quota)}
+          </div>
+        )}
 
         <div className="flex flex-wrap gap-2">
           <TabButton active={tab === 'write'} onClick={() => switchTab('write')} icon={Wand2} label="Write" />

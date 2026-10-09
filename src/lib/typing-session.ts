@@ -50,6 +50,18 @@ const initialState: TypingSessionState = {
 let state = initialState
 let activeText = ''
 const listeners = new Set<() => void>()
+const finishWaiters = new Set<(reason: TypingDone['reason']) => void>()
+
+function settleWaiters(reason: TypingDone['reason']): void {
+  finishWaiters.forEach((resolve) => resolve(reason))
+  finishWaiters.clear()
+}
+
+/** Resolves when the current run ends: completed, cancelled, or error. */
+export function waitForTypingSession(): Promise<TypingDone['reason']> {
+  if (!state.running) return Promise.resolve('completed')
+  return new Promise((resolve) => finishWaiters.add(resolve))
+}
 
 function update(patch: Partial<TypingSessionState>): void {
   state = { ...state, ...patch }
@@ -113,6 +125,7 @@ export async function startTypingSession(text: string, options: TypingStartOptio
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     update({ running: false, paused: false, countdownMs: 0, message: `Failed to start: ${message}`, error: message })
+    settleWaiters('error')
     throw error
   }
 }
@@ -133,6 +146,7 @@ export async function startSavedTypingSession(): Promise<void> {
 export async function stopTypingSession(): Promise<void> {
   await cancelTyping()
   update({ running: false, paused: false, countdownMs: 0, message: 'Stopped.' })
+  settleWaiters('cancelled')
 }
 
 export async function toggleTypingSessionPause(): Promise<void> {
@@ -180,6 +194,7 @@ export function handleTypingDone(done: TypingDone): void {
     void py('analytics.record', { text: activeText, source: 'live-typing' })
   }
   activeText = ''
+  settleWaiters(done.reason)
 
   try {
     const queued = localStorage.getItem(LIVE_BUFFER_STORAGE_KEY)
@@ -197,6 +212,7 @@ export function handleTypingDone(done: TypingDone): void {
 export function handleTypingError(message: string): void {
   activeText = ''
   update({ running: false, paused: false, countdownMs: 0, message: `Engine error: ${message}`, error: message })
+  settleWaiters('error')
 }
 
 export function handleTypingPauseChange(paused: boolean): void {

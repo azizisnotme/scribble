@@ -3,7 +3,9 @@ import { AlertCircle, Download, LoaderCircle, RefreshCw, Search, ShieldCheck, Us
 
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { AdminAiAccess } from '@/components/AdminAiAccess'
 import { AdminPolicy } from '@/components/AdminPolicy'
+import { refreshAiQuota } from '@/lib/ai-quota'
 import { NOTICE_CHANGED_EVENT } from '@/components/NoticeBanner'
 import { supabase } from '@/lib/supabase'
 
@@ -19,6 +21,8 @@ interface AdminUser {
   status_reason: string | null
   banned_until: string | null
   note: string | null
+  ai_unlimited?: boolean
+  ai_daily_limit?: number | null
 }
 
 interface AuditEntry {
@@ -40,6 +44,7 @@ interface AppControls {
   signups_open?: boolean
   maintenance_on?: boolean
   maintenance_message?: string
+  ai_daily_limit?: number
 }
 
 interface AdminDesk {
@@ -49,11 +54,13 @@ interface AdminDesk {
   controls?: AppControls
   blocked?: BlockedEmail[]
   audit: AuditEntry[]
+  ai_used_today?: Record<string, number>
+  is_owner?: boolean
 }
 
 type Filter = 'all' | 'active' | 'suspended' | 'recent'
 type Sort = 'newest' | 'seen' | 'name'
-type Panel = 'people' | 'notice' | 'controls' | 'blocks' | 'admins' | 'activity'
+type Panel = 'people' | 'notice' | 'controls' | 'ai' | 'blocks' | 'admins' | 'activity'
 
 function messageFrom(error: unknown): string {
   if (error instanceof Error && error.message) return error.message
@@ -151,6 +158,7 @@ export function Admin() {
         const { error: actionError } = (await action()) as { error: { message: string } | null }
         if (actionError) throw actionError
         if (id === 'notice' || id === 'controls' || id === 'policy') window.dispatchEvent(new Event(NOTICE_CHANGED_EVENT))
+        if (id.startsWith('ai-')) void refreshAiQuota()
         await loadDesk()
       } catch (actionError) {
         setError(messageFrom(actionError))
@@ -249,6 +257,7 @@ export function Admin() {
               ['people', 'People'],
               ['notice', 'Notice'],
               ['controls', 'Policy'],
+              ['ai', 'AI access'],
               ['blocks', 'Blocks'],
               ['admins', 'Admins'],
               ['activity', 'Activity'],
@@ -465,6 +474,21 @@ export function Admin() {
             disabled={needsSql}
             busy={busyId === 'policy'}
             onSave={(payload) => void run('policy', () => supabase!.rpc('admin_save_policy', { payload }))}
+          />
+        ) : panel === 'ai' ? (
+          <AdminAiAccess
+            users={desk?.users ?? []}
+            ownerEmail={OWNER_EMAIL}
+            isOwner={desk?.is_owner === true}
+            defaultLimit={desk?.controls?.ai_daily_limit ?? 25}
+            usedToday={desk?.ai_used_today ?? {}}
+            busyId={busyId}
+            disabled={needsSql}
+            onSaveDefault={(limit) => void run('ai-default', () => supabase!.rpc('admin_set_ai_default', { daily_limit: limit }))}
+            onSaveUser={(id, unlimited, dailyLimit) =>
+              void run(`ai-${id}`, () => supabase!.rpc('admin_set_ai_access', { target_id: id, unlimited, daily_limit: dailyLimit }))
+            }
+            onResetUser={(id) => void run(`ai-${id}`, () => supabase!.rpc('admin_reset_ai_usage', { target_id: id }))}
           />
         ) : panel === 'blocks' ? (
           <Card className="space-y-4 border-border/60 p-5">

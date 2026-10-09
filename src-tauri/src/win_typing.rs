@@ -13,11 +13,11 @@ mod imp {
     use std::ffi::c_void;
 
     use windows::Win32::Foundation::{BOOL, HWND, LPARAM, WPARAM};
-    use windows::Win32::System::Threading::GetCurrentProcessId;
+    use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentProcessId, GetCurrentThreadId};
     use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowThreadProcessId, IsWindow,
-        IsWindowVisible, SendMessageTimeoutW, SetForegroundWindow, SMTO_ABORTIFHUNG, SMTO_BLOCK,
-        WM_GETTEXT, WM_GETTEXTLENGTH,
+        BringWindowToTop, EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowThreadProcessId,
+        IsIconic, IsWindow, IsWindowVisible, SendMessageTimeoutW, SetForegroundWindow, ShowWindow,
+        SMTO_ABORTIFHUNG, SMTO_BLOCK, SW_RESTORE, WM_GETTEXT, WM_GETTEXTLENGTH,
     };
 
     use super::WindowInfo;
@@ -211,14 +211,67 @@ mod imp {
     }
 
     pub fn refocus_target(handle: TargetHandle) {
-        unsafe {
-            let hwnd = HWND(handle as *mut c_void);
-            let _ = SetForegroundWindow(hwnd);
-        }
+        bring_to_front(handle);
     }
 
     pub fn is_target_foreground(handle: TargetHandle) -> bool {
         unsafe { GetForegroundWindow() == HWND(handle as *mut c_void) }
+    }
+
+    /// The window the person is looking at, unless it belongs to Scribble.
+    pub fn foreground_window(scribble_hwnd: Option<TargetHandle>) -> Option<WindowInfo> {
+        unsafe {
+            let fg = GetForegroundWindow();
+            if fg.0.is_null() || is_our_process(fg, scribble_hwnd) {
+                return None;
+            }
+            let title = window_title(fg);
+            if title.is_empty() {
+                return None;
+            }
+            Some(WindowInfo {
+                title,
+                hwnd: fg.0 as isize,
+            })
+        }
+    }
+
+    /// Case-insensitive title search; exact matches win over partial ones.
+    pub fn find_window_loose(title: &str, scribble_hwnd: Option<TargetHandle>) -> Option<WindowInfo> {
+        let needle = title.trim().to_lowercase();
+        if needle.is_empty() {
+            return None;
+        }
+        let windows = list_windows(scribble_hwnd);
+        if let Some(w) = windows.iter().find(|w| w.title.to_lowercase() == needle) {
+            return Some(w.clone());
+        }
+        windows
+            .into_iter()
+            .find(|w| w.title.to_lowercase().contains(&needle))
+    }
+
+    /// Windows only lets the foreground thread change focus, so briefly share
+    /// input state with whoever is in front before switching.
+    pub fn bring_to_front(handle: TargetHandle) -> bool {
+        if !is_valid_window(handle) {
+            return false;
+        }
+        unsafe {
+            let hwnd = HWND(handle as *mut c_void);
+            if IsIconic(hwnd).as_bool() {
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+            }
+            let ours = GetCurrentThreadId();
+            let front = GetWindowThreadProcessId(GetForegroundWindow(), None);
+            let attached = front != 0 && front != ours && AttachThreadInput(ours, front, true).as_bool();
+            let _ = BringWindowToTop(hwnd);
+            let _ = SetForegroundWindow(hwnd);
+            if attached {
+                let _ = AttachThreadInput(ours, front, false);
+            }
+        }
+        is_target_foreground(handle)
     }
 
     pub fn foreground_is_console() -> bool {
@@ -313,6 +366,18 @@ mod imp {
     pub fn refocus_target(_handle: TargetHandle) {}
 
     pub fn is_target_foreground(_handle: TargetHandle) -> bool {
+        false
+    }
+
+    pub fn foreground_window(_scribble_hwnd: Option<TargetHandle>) -> Option<WindowInfo> {
+        None
+    }
+
+    pub fn find_window_loose(_title: &str, _scribble_hwnd: Option<TargetHandle>) -> Option<WindowInfo> {
+        None
+    }
+
+    pub fn bring_to_front(_handle: TargetHandle) -> bool {
         false
     }
 

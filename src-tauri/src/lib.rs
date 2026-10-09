@@ -18,6 +18,7 @@
 //! available from legacy commands only.
 
 mod auth_callback;
+mod desktop_actions;
 mod desktop_shell;
 mod bundled_ai;
 mod typing;
@@ -394,6 +395,12 @@ pub fn run() {
             auth_storage_remove,
             auth_callback_url,
             desktop_shell::overlay_set_visible,
+            desktop_actions::launch_app,
+            desktop_actions::foreground_window,
+            desktop_actions::focus_window,
+            desktop_actions::focus_hwnd,
+            desktop_actions::press_keys,
+            desktop_actions::gpu_memory,
             list_target_windows,
             type_text,
             cancel_typing,

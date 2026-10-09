@@ -1,4 +1,5 @@
 /** Browser-side hardware hints (WebGPU check for built-in Scribble AI). */
+import { gpuMemory } from '@/lib/desktop'
 
 export type HardwareTier = 'high' | 'mid' | 'low'
 
@@ -13,6 +14,15 @@ export interface HardwareProfile {
   gpuVendor?: string
   gpuArchitecture?: string
   gpuDevice?: string
+  /** Dedicated video memory reported by Windows, when known */
+  vramMB?: number
+}
+
+/** WebView2 caps navigator.deviceMemory at 8, so real video memory decides the tier when Windows reports it. */
+function tierFromVram(vramMB: number): HardwareTier {
+  if (vramMB >= 7000) return 'high'
+  if (vramMB >= 3800) return 'mid'
+  return 'low'
 }
 
 function navMemGiB(): number | undefined {
@@ -80,13 +90,17 @@ export async function detectHardwareProfile(): Promise<HardwareProfile> {
     /intel|apple|amd\s*radeon\s*\(/i.test(vLower) || /ANGLE \(Intel/i.test(gpuDevice ?? '')
 
   let tier: HardwareTier = 'mid'
-  if (mem >= 12 && hardwareConcurrency >= 8 && maxBind >= 256 * 1024 * 1024 && !integratedHint) {
+  if (mem >= 8 && hardwareConcurrency >= 8 && maxBind >= 1024 * 1024 * 1024 && !integratedHint) {
     tier = 'high'
   } else if (mem >= 8 && maxBind >= 128 * 1024 * 1024) {
     tier = 'mid'
   } else {
     tier = 'low'
   }
+
+  const vram = await gpuMemory()
+  const vramMB = vram && vram.dedicated_mb > 0 ? vram.dedicated_mb : undefined
+  if (vramMB !== undefined) tier = tierFromVram(vramMB)
 
   return {
     tier,
@@ -97,5 +111,6 @@ export async function detectHardwareProfile(): Promise<HardwareProfile> {
     gpuVendor,
     gpuArchitecture,
     gpuDevice,
+    vramMB,
   }
 }
