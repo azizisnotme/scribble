@@ -1,0 +1,7 @@
+# scripts/prefetch-bundled-ai.ps1 populates this folder with multi-GB
+# Ollama runtime + model blobs. Don't ever commit them; they re-generate
+# from upstream releases.
+runtime/
+models/
+*.zip
+*.partial

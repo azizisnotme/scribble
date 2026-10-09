@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  installer.wxs
+  Per-user (no admin) WiX 5 source for Scribble.
+
+  We sidestep Tauri's hardcoded per-machine MSI bundler by packaging the
+  Tauri-built exe ourselves with `Scope="perUser"`. The result installs
+  into %LocalAppData%\Scribble, registers a per-user uninstall entry
+  under HKCU, and never triggers a UAC prompt.
+
+  Build it with build.bat (which chains Tauri's NSIS bundler with this
+  WiX compile). Output: Output\Scribble_Setup.msi.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <Package
+      Name="Scribble"
+      Manufacturer="Scribble"
+      Version="0.2.0.0"
+      UpgradeCode="78534004-8114-4a57-b2c8-d071d2a29887"
+      Scope="perUser"
+      Compressed="yes"
+      InstallerVersion="500">
+
+    <SummaryInformation Description="Scribble per-user installer" />
+
+    <MajorUpgrade
+        AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of Scribble is already installed." />
+
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="INSTALLFOLDER" Name="Scribble" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ApplicationProgramsFolder" Name="Scribble" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="DesktopFolder" />
+
+    <Feature Id="MainExecutable"
+             Title="Scribble"
+             Description="The Scribble application."
+             Level="1"
+             AllowAbsent="no"
+             ConfigurableDirectory="INSTALLFOLDER">
+      <ComponentGroupRef Id="ScribbleAppFiles" />
+      <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="UninstallRegistry" />
+    </Feature>
+
+    <Feature Id="DesktopShortcutFeature"
+             Title="Desktop shortcut"
+             Description="Add a Scribble shortcut to your Desktop."
+             Level="1">
+      <ComponentRef Id="DesktopShortcut" />
+    </Feature>
+
+    <ComponentGroup Id="ScribbleAppFiles" Directory="INSTALLFOLDER">
+      <Component Id="ScribbleExe" Guid="b1f2c3d4-2222-4bbb-9ccc-2aaaabbbcccc">
+        <File Id="ScribbleExeFile"
+              Name="Scribble.exe"
+              Source="src-tauri\target\release\scribble-desktop.exe"
+              KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <Component Id="StartMenuShortcut"
+               Directory="ApplicationProgramsFolder"
+               Guid="e7b3a61e-2222-48b5-9b99-72e0743a3a94">
+      <Shortcut Id="StartMenuShortcutEntry"
+                Name="Scribble"
+                Description="Launch Scribble"
+                Target="[#ScribbleExeFile]"
+                WorkingDirectory="INSTALLFOLDER" />
+      <RemoveFolder Id="RemoveApplicationProgramsFolder"
+                    Directory="ApplicationProgramsFolder"
+                    On="uninstall" />
+      <RegistryValue Root="HKCU"
+                     Key="Software\Scribble\Shortcuts"
+                     Name="StartMenu"
+                     Type="integer"
+                     Value="1"
+                     KeyPath="yes" />
+    </Component>
+
+    <Component Id="DesktopShortcut"
+               Directory="DesktopFolder"
+               Guid="d877e7b8-2222-484e-9f51-c55ab4fe1b0d">
+      <Shortcut Id="DesktopShortcutEntry"
+                Name="Scribble"
+                Description="Launch Scribble"
+                Target="[#ScribbleExeFile]"
+                WorkingDirectory="INSTALLFOLDER" />
+      <RegistryValue Root="HKCU"
+                     Key="Software\Scribble\Shortcuts"
+                     Name="Desktop"
+                     Type="integer"
+                     Value="1"
+                     KeyPath="yes" />
+    </Component>
+
+    <Component Id="UninstallRegistry"
+               Directory="INSTALLFOLDER"
+               Guid="3c8b2c1a-2222-4a8c-9d2b-2f0c1b4e7a55">
+      <RegistryKey Root="HKCU" Key="Software\Scribble">
+        <RegistryValue Name="InstallPath" Type="string" Value="[INSTALLFOLDER]" KeyPath="yes" />
+        <RegistryValue Name="Version"     Type="string" Value="0.2.0.0" />
+      </RegistryKey>
+    </Component>
+
+    <ui:WixUI Id="WixUI_Minimal" />
+    <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
+
+    <Property Id="ARPPRODUCTICON" Value="ScribbleIcon.exe" />
+    <Icon Id="ScribbleIcon.exe" SourceFile="src-tauri\target\release\scribble-desktop.exe" />
+
+  </Package>
+</Wix>
